@@ -1,0 +1,193 @@
+﻿# Yandex API
+Function Input-Captcha
+{
+	Param($src)
+	
+	Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+
+	$bimg  = [Net.WebClient]::new().DownloadData($src)
+	$ms    = [IO.MemoryStream]::new($bimg)
+	$img   = [Drawing.Image]::FromStream($ms)
+
+	[Windows.Forms.Application]::EnableVisualStyles();
+	
+	$form = New-Object Windows.Forms.Form -Property @{
+		Text            = "Captcha"
+		Width           = 300
+		Height          = 227
+		FormBorderStyle = "FixedDialog"
+		Icon            = [Drawing.Icon]::ExtractAssociatedIcon(
+			"$env:ProgramFiles\Internet Explorer\iexplore.exe"
+		)
+	}
+	
+	$pictureBox = New-Object Windows.Forms.PictureBox -Property @{
+		Width    = $img.Size.Width
+		Height   = $img.Size.Height
+		Location = New-Object Drawing.Size(60,30)
+		Image    = $img
+	}
+	
+	$button = New-Object Windows.Forms.Button -Property @{
+		Location = New-Object Drawing.Size(12,153)
+		Size     = New-Object Drawing.Size(260,23)
+		Text     = "Set"
+	}
+	
+	$button.Add_Click({
+		$script:rep = $textbox.Text.Trim()
+		$form.Close()
+	})
+
+	$textbox = New-Object Windows.Forms.TextBox -Property @{
+		Location = New-Object Drawing.Size(12,117) 
+		Size     = New-Object Drawing.Size(260,20) 
+	}
+	
+	$form.Controls.Add($pictureBox)
+	$form.Controls.Add($button)
+	$form.Controls.Add($textbox) 
+	$form.Add_Shown( { $form.Activate() } )
+	$form.ShowDialog() | Out-Null
+}
+
+Function Get-Token
+{
+	[CmdLetBinding()]
+	Param(
+		[String]$Url    = "https://pddimp.yandex.ru",
+		[String]$TUrl   = "https://pddimp.yandex.ru/api2/admin/get_token",
+		[Parameter(Mandatory)]
+			[PSCredential]$Credential,
+		[Parameter(Mandatory)]
+			[String]$DomainName
+	)
+	
+	try {
+		# Логинемся в Yandex Passport
+		$wr = Invoke-WebRequest $TUrl -SessionVariable ya
+		
+		# В форме заполняем login&passwd
+		$Form = $wr.Forms[0]
+		$Form.Fields["login"]  = $Credential.UserName
+		$Form.Fields["passwd"] = $Credential.GetNetworkCredential().Password
+		
+		if($Form)
+		{
+			# Отправляем Post запрос
+			$wr = Invoke-WebRequest -Uri $Form.Action -WebSession $ya -Method POST -Body $Form
+			
+			# Если успешно, то переходим к странице получения токена
+			$wr = Invoke-WebRequest $TUrl -WebSession $ya
+			if($wr.ParsedHtml.Title)
+			{
+				$Form = $wr.Forms[0]
+				
+				# Удаляем из post запроса token_del 
+				$Form.Fields.Remove("token_del") | Out-Null
+				
+				# Вводим капчу
+				Input-Captcha $wr.Images.src
+				
+				# Заполняем форму rep - Captcha
+				$Form.Fields["rep"]         = $rep 
+				$Form.Fields["domain_name"] = $DomainName
+				
+				# Отправляем Post запрос с методом token_get
+				$wr=Invoke-WebRequest -Uri "$url$($Form.Action)" -WebSession $ya -Method POST -Body $Form
+				
+				# Возвращаем полученный токен
+				$wr.ParsedHtml.getElementsByTagName("Strong").Item(0).outerText
+			}
+		}
+	}
+	catch {
+		$_
+	}
+}
+
+# Начальные переменные
+$DomainName          = "contoso.ru"
+$Email               = "pki@contoso.ru"
+$SAN                 = "sfb.contoso.ru","lyncdiscoverinternal.contoso.ru","web.contoso.ru","contoso.ru"
+$Index               = "sfb"
+$CertificateName     = "SfB2015FECert"
+$CertificatePassword = "12345678"
+
+# URL Yandex API
+$LUrl = 'https://pddimp.yandex.ru/api2/admin/dns/list?domain={0}' -f $DomainName
+$EUrl = 'https://pddimp.yandex.ru/api2/admin/dns/edit'
+$AUrl = 'https://pddimp.yandex.ru/api2/admin/dns/add'
+
+
+# Установка модуля ACMESharp
+Install-Module -Name ACMESharp -AllowClobber
+
+# Инициализация хранилища
+Initialize-ACMEVault
+
+# Регистрация аккаунта
+New-ACMERegistration -Contacts mailto:$Email -AcceptTos
+
+# Подтверждение владением записей домена
+
+$SAN | Foreach-Object {$i=1} {
+	$id = "$Index$i"
+	New-ACMEIdentifier -Dns $_ -Alias $id | Out-Null
+	Complete-ACMEChallenge -IdentifierRef $id -ChallengeType dns-01 -Handler manual
+	$i++
+}
+
+# Содержит ответ от Let's Encrypt , какие записи и данные нужно создать
+# RecordName": "_acme-challenge.sfb.contoso.ru
+# RecordValue": "-AR8RK2THqpP-Z_V-0yevlN90NhIkfFMq5KEihPfVuA
+$DNS = (Get-ACMEVault).Identifiers.Where{$_.Alias -match "$Index"}.Authorization.Challenges.Where{$_.Type -eq "dns-01"}.Challenge
+
+$PddToken = Get-Token -Credential "" -DomainName $DomainName
+
+if($PddToken)
+{
+	# Получим все записи для дальнейшего сравнения
+	$AllRecords = Invoke-WebRequest $LUrl -Headers @{"accept" = "application/json";PddToken = $PddToken} | Foreach Content | ConvertFrom-Json | Foreach {$_.Records}
+	
+	$DNS | Foreach {
+		$rdns = $_
+		$record = $AllRecords.Where{$_.FQDN -eq $rdns.RecordName} 
+		if($record) {
+			# Обновляем данные
+			Invoke-WebRequest $EUrl -Headers @{"accept"="application/json" ; PddToken = $PddToken} -Method POST -Body @{
+				'domain'=$DomainName
+				'record_id'=$record.record_id
+				'content'=$rdns.RecordValue
+			}
+		}
+		else {
+			# Создаем записи
+			Invoke-WebRequest $AUrl -Headers @{"accept"="application/json" ; PddToken = $PddToken} -Method POST -Body @{
+				'domain'=$DomainName
+				'type'='TXT'
+				'subdomain' = $rdns.RecordName.TrimEnd($DomainName)
+				'content'=$rdns.RecordValue
+			}
+		}
+	}
+}
+
+# Отправить запрос в Let's Encrypt для проверки созданных dns записей
+(Get-ACMEIdentifier).Where{$_.Alias -match "$Index"}.Foreach{Submit-ACMEChallenge -IdentifierRef $_.Alias -ChallengeType dns-01}
+Start-Sleep -Seconds 60
+(Get-ACMEIdentifier).Where{$_.Alias -match "$Index"}.Foreach{Update-ACMEIdentifier -IdentifierRef $_.Alias}
+
+# Запрос и генерация сертификата
+$idref = (Get-ACMEIdentifier).Where{$_.Alias -match "$Index"} | Select -First 1 | Foreach {$_.Alias}
+$aref =  (Get-ACMEIdentifier).Where{$_.Alias -match "$Index"} | Select -Skip 1  | Foreach {$_.Alias}
+New-ACMECertificate -Generate -IdentifierRef $idref -AlternativeIdentifierRefs $aref -Alias $CertificateName
+
+# Отправить запрос
+Submit-ACMECertificate -CertificateRef $CertificateName
+
+Update-ACMECertificate -CertificateRef $CertificateName
+
+# Экспорт в PFX
+Get-ACMECertificate $CertificateName -ExportPkcs12 "$CertificateName.pfx" -CertificatePassword $CertificatePassword
+

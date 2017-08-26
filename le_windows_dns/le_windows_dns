@@ -1,0 +1,69 @@
+# Начальные переменные
+$DomainName          = "contoso.ru"
+$Email               = "pki@contoso.ru"
+$SAN                 = "sfb.contoso.ru","lyncdiscoverinternal.contoso.ru","web.contoso.ru","contoso.ru"
+$Index               = "sfb"
+$CertificateName     = "SfB2015FECert"
+$CertificatePassword = "12345678"
+
+# Установка модуля ACMESharp
+Install-Module -Name ACMESharp -AllowClobber
+
+# Инициализация хранилища
+Initialize-ACMEVault
+
+# Регистрация аккаунта
+New-ACMERegistration -Contacts mailto:$Email -AcceptTos
+
+# Подтверждение владением записей домена
+
+$SAN | Foreach-Object {$i=1} {
+	$id = "$Index$i"
+	New-ACMEIdentifier -Dns $_ -Alias $id | Out-Null
+	Complete-ACMEChallenge -IdentifierRef $id -ChallengeType dns-01 -Handler manual
+	$i++
+}
+
+# Содержит ответ от Let's Encrypt , какие записи и данные нужно создать
+# RecordName": "_acme-challenge.sfb.contoso.ru
+# RecordValue": "-AR8RK2THqpP-Z_V-0yevlN90NhIkfFMq5KEihPfVuA
+$DNS = (Get-ACMEVault).Identifiers.Where{$_.Alias -match "$Index"}.Authorization.Challenges.Where{$_.Type -eq "dns-01"}.Challenge
+
+# Создаем ресурсные записи 
+# Windows DNS Server
+$AllRecords = (Get-DnsServerResourceRecord -ZoneName $DomainName -RRType Txt).Where{$_.Name -match "_acme-challenge"}
+
+$DNS.Foreach{
+	$rdns = $_
+	$name = $_.RecordName.TrimEnd($DomainName)
+	$record = $AllRecords.Where{$_.HostName -eq $name}
+	if($record)
+	{
+		$newrecord = $record.Clone()
+		$newrecord.RecordData.DescriptiveText = $_.RecordValue
+		Set-DnsServerResourceRecord -ZoneName $DomainName -NewInputObject $newrecord -OldInputObject $record
+	}
+	else
+	{
+		ADD-DnsServerResourceRecord -ZoneName $DomainName -Txt -Name $name -DescriptiveText $_.RecordValue
+	}
+}
+
+# Отправить запрос в Let's Encrypt для проверки созданных dns записей
+(Get-ACMEIdentifier).Where{$_.Alias -match "$Index"}.Foreach{Submit-ACMEChallenge -IdentifierRef $_.Alias -ChallengeType dns-01}
+Start-Sleep -Seconds 60
+(Get-ACMEIdentifier).Where{$_.Alias -match "$Index"}.Foreach{Update-ACMEIdentifier -IdentifierRef $_.Alias}
+
+# Запрос и генерация сертификата
+$idref = (Get-ACMEIdentifier).Where{$_.Alias -match "$Index"} | Select -First 1 | Foreach {$_.Alias}
+$aref =  (Get-ACMEIdentifier).Where{$_.Alias -match "$Index"} | Select -Skip 1 | Foreach {$_.Alias}
+New-ACMECertificate -Generate -IdentifierRef $idref -AlternativeIdentifierRefs $aref -Alias $CertificateName
+
+# Отправить запрос
+Submit-ACMECertificate -CertificateRef $CertificateName
+
+Update-ACMECertificate -CertificateRef $CertificateName
+
+# Экспорт в PFX
+Get-ACMECertificate $CertificateName -ExportPkcs12 "$CertificateName.pfx" -CertificatePassword $CertificatePassword
+

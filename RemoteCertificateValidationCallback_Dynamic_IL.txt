@@ -1,0 +1,59 @@
+﻿# https://stackoverflow.com/questions/36456104/invoke-restmethod-ignore-self-signed-certs
+# Invoke-RestMethod https://expired.badssl.com/
+
+# Module Builder
+$Domain = [AppDomain]::CurrentDomain
+$DynAssembly = New-Object System.Reflection.AssemblyName('Win32IC')
+
+# Запускать в памяти [System.Reflection.Emit.AssemblyBuilderAccess]::Run
+$AssemblyBuilder = $Domain.DefineDynamicAssembly(
+    $DynAssembly, 
+    [System.Reflection.Emit.AssemblyBuilderAccess]::Run
+) 
+$ModuleBuilder = $AssemblyBuilder.DefineDynamicModule('Win32IC', $False)
+
+# [Dummy]::GetDelegate()
+$TypeBuilder = $ModuleBuilder.DefineType('Dummy', 'Public, Class')
+
+# Определим ReturnTrue метод
+$ReturnTrue = $TypeBuilder.DefineMethod(
+	# Название метода
+	'ReturnTrue',
+	# Атрибуты класса
+	[Reflection.MethodAttributes] 'Public, Static',
+	# Тип возврата
+	[bool],
+	# Тип параметров 
+	[Type[]] @(
+		[object],
+		[System.Security.Cryptography.X509Certificates.X509Certificate],
+		[System.Security.Cryptography.X509Certificates.X509Chain],
+		[System.Net.Security.SslPolicyErrors]
+	)
+) 
+
+$ilReturnTrue = $ReturnTrue.GetILGenerator()
+$ilReturnTrue.Emit([Reflection.Emit.OpCodes]::Ldc_I4_1)
+$ilReturnTrue.Emit([Reflection.Emit.OpCodes]::Ret)
+
+# Определим GetDelegate метод
+$GetDelegate = $TypeBuilder.DefineMethod(
+	'GetDelegate',
+	[Reflection.MethodAttributes] 'Public, Static',
+	[System.Net.Security.RemoteCertificateValidationCallback],
+	$null
+)
+
+$ctor = [System.Net.Security.RemoteCertificateValidationCallback].GetConstructor(
+	[type[]]@([object],[intptr])
+)
+
+$ilGetDelegate = $GetDelegate.GetILGenerator()
+$ilGetDelegate.Emit([Reflection.Emit.OpCodes]::Ldnull)
+$ilGetDelegate.Emit([Reflection.Emit.OpCodes]::Ldftn,$ReturnTrue)
+$ilGetDelegate.Emit([Reflection.Emit.OpCodes]::Newobj,$ctor)
+$ilGetDelegate.Emit([Reflection.Emit.OpCodes]::Ret)
+
+# Создание типа и вызов метода
+$Dummy = $TypeBuilder.CreateType()
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = $Dummy::GetDelegate()

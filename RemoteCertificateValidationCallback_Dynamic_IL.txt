@@ -1,5 +1,18 @@
-﻿# https://stackoverflow.com/questions/36456104/invoke-restmethod-ignore-self-signed-certs
+# https://stackoverflow.com/questions/36456104/invoke-restmethod-ignore-self-signed-certs
 # Invoke-RestMethod https://expired.badssl.com/
+
+<#
+public static class Dummy {
+    public static bool ReturnTrue(object sender,
+        X509Certificate certificate,
+        X509Chain chain,
+        SslPolicyErrors sslPolicyErrors) { return true; }
+
+    public static RemoteCertificateValidationCallback GetDelegate() {
+        return new RemoteCertificateValidationCallback(Dummy.ReturnTrue);
+    }
+}
+#>
 
 # Module Builder
 $Domain = [AppDomain]::CurrentDomain

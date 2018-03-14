@@ -1,6 +1,7 @@
-# Path - где храним библиотеки
-# Mail - почта администратора
-# Domain - домен для которого получаем сертификат
+# Path - ГЈГ¤ГҐ ГµГ°Г Г­ГЁГ¬ ГЎГЁГЎГ«ГЁГ®ГІГҐГЄГЁ
+# Mail - ГЇГ®Г·ГІГ  Г Г¤Г¬ГЁГ­ГЁГ±ГІГ°Г ГІГ®Г°Г 
+# Domain - Г¤Г®Г¬ГҐГ­ Г¤Г«Гї ГЄГ®ГІГ®Г°Г®ГЈГ® ГЇГ®Г«ГіГ·Г ГҐГ¬ Г±ГҐГ°ГІГЁГґГЁГЄГ ГІ
+# PfxPassword - РїР°СЂРѕР»СЊ РґР»СЏ Pfx
 $Path = "C:\certes"
 $Mail = "mailto:admin@contoso.ru"
 $Domain = "*.contoso.ru"
@@ -8,14 +9,14 @@ $PfxFriendlyName = "CONTOSO_{0}" -f (Get-Date).AddMonths(3).ToString("MMyy")
 $PfxPath = Join-Path $Path "wildcard_cert.pfx"
 $PfxPassword = "12345678"
 
-# Ссылки для скачивания nupkg
+# Г‘Г±Г»Г«ГЄГЁ Г¤Г«Гї Г±ГЄГ Г·ГЁГўГ Г­ГЁГї nupkg
 $Urls = (
 	"https://www.nuget.org/api/v2/package/Certes",
 	"https://www.nuget.org/api/v2/package/BouncyCastle.Crypto.dll",
 	"https://www.nuget.org/api/v2/package/Newtonsoft.Json"
 )
 
-# Указываем библиотеки для проверки
+# Г“ГЄГ Г§Г»ГўГ ГҐГ¬ ГЎГЁГЎГ«ГЁГ®ГІГҐГЄГЁ Г¤Г«Гї ГЇГ°Г®ГўГҐГ°ГЄГЁ
 $Dlls = (
 	"$Path\lib\net45\Certes.dll",
 	"$Path\lib\BouncyCastle.Crypto.dll",
@@ -23,48 +24,48 @@ $Dlls = (
 )
 
 
-# Создаем папку
+# Г‘Г®Г§Г¤Г ГҐГ¬ ГЇГ ГЇГЄГі
 if( -not (Test-Path $path) ) {
 	New-Item -Type Directory -Path $path | Out-Null
 }
 
 Test-Path $Dlls | Where-Object {-not $_} | Foreach-Object { 
 	$Urls | Foreach-Object {
-		# Скачиваем nupkg
+		# Г‘ГЄГ Г·ГЁГўГ ГҐГ¬ nupkg
 		$r = Invoke-WebRequest $_ -UseBasicParsing
 		$filename = Join-Path $path $r.BaseResponse.ResponseUri.Segments[-1]
 		[System.IO.File]::WriteAllBytes($filename,$r.Content)
 
-		# Распаковываем nupkg
+		# ГђГ Г±ГЇГ ГЄГ®ГўГ»ГўГ ГҐГ¬ nupkg
 		Expand-Archive $filename  -OutputPath $path -Force
 	}
 }
 
-# Удалим лишнее
+# Г“Г¤Г Г«ГЁГ¬ Г«ГЁГёГ­ГҐГҐ
 Get-ChildItem $path | Where {$_.Name -ne "lib"} | Remove-Item -Force -Recurse
 
-# Подгрузи библиотеки
+# ГЏГ®Г¤ГЈГ°ГіГ§ГЁ ГЎГЁГЎГ«ГЁГ®ГІГҐГЄГЁ
 $Dlls | Foreach-Object {
 	[System.Reflection.Assembly]::LoadFile($_) | Out-Null
 }
 
 
-# Создадим учетную запись
-# Для тестового использования LetsEncryptStagingV2
+# Г‘Г®Г§Г¤Г Г¤ГЁГ¬ ГіГ·ГҐГІГ­ГіГѕ Г§Г ГЇГЁГ±Гј
+# Г„Г«Гї ГІГҐГ±ГІГ®ГўГ®ГЈГ® ГЁГ±ГЇГ®Г«ГјГ§Г®ГўГ Г­ГЁГї LetsEncryptStagingV2
 $context = [Certes.AcmeContext]::new([Certes.Acme.WellKnownServers]::LetsEncryptV2)
 $context.Result
 $account = $context.NewAccount([System.Collections.Generic.List[string]]$Mail, $true)
 $account.Result
 
-# Формируем запрос на получение wildcard
+# Г”Г®Г°Г¬ГЁГ°ГіГҐГ¬ Г§Г ГЇГ°Г®Г± Г­Г  ГЇГ®Г«ГіГ·ГҐГ­ГЁГҐ wildcard
 $order = $context.NewOrder([Collections.Generic.List[string]]$Domain)
 $authz = $order.Result.Authorizations()
 $dnsChallenge = $authz.Result.Resource().Result.Challenges
 
-# Содержит token для DNS записи _acme-challenge.contoso.com
+# Г‘Г®Г¤ГҐГ°Г¦ГЁГІ token Г¤Г«Гї DNS Г§Г ГЇГЁГ±ГЁ _acme-challenge.contoso.com
 $dnsTxt = [Certes.ISignatureKeyExtensions]::DnsTxt($context.AccountKey,$dnsChallenge.Token)
 
-# Создаем ресурсные записи 
+# Г‘Г®Г§Г¤Г ГҐГ¬ Г°ГҐГ±ГіГ°Г±Г­Г»ГҐ Г§Г ГЇГЁГ±ГЁ 
 # Windows DNS Server
 $DomainName = $Domain.Replace("*.","")
 $Name = "_acme-challenge"
@@ -82,9 +83,9 @@ else
 }
 
 
-# Получаем сертификат
+# ГЏГ®Г«ГіГ·Г ГҐГ¬ Г±ГҐГ°ГІГЁГґГЁГЄГ ГІ
 if($dnsTxt) {
-	# Отправляем запрос на проверку DNS записи
+	# ГЋГІГЇГ°Г ГўГ«ГїГҐГ¬ Г§Г ГЇГ°Г®Г± Г­Г  ГЇГ°Г®ГўГҐГ°ГЄГі DNS Г§Г ГЇГЁГ±ГЁ
 	$validatetatus = $authz.Result.Challenges().Result.Validate()
 	$validatetatus.Result
 	
@@ -93,16 +94,16 @@ if($dnsTxt) {
 	$csr.AddName("CN=$Domain")
 	$order.Result.Finalize($csr.Generate())
 	
-	# Скачиваем цепочку сертификатов
+	# Г‘ГЄГ Г·ГЁГўГ ГҐГ¬ Г¶ГҐГЇГ®Г·ГЄГі Г±ГҐГ°ГІГЁГґГЁГЄГ ГІГ®Гў
 	$certChain = $order.Result.Download()
 	$cert = $certChain.Result
 		
-	# Экспорт в Pfx
+	# ГќГЄГ±ГЇГ®Г°ГІ Гў Pfx
 	$certKey = [Certes.KeyFactory]::NewKey("RS256")
 	$pfx = [Certes.CertificateChainExtensions]::ToPfx($cert,$certKey)
 	$pfxcert = $pfx.Build($PfxFriendlyName, $PfxPassword)
 	[System.IO.File]::WriteAllBytes($PfxPath,$pfxcert)
 }
 
-# Отзыв сертификата
+# ГЋГІГ§Г»Гў Г±ГҐГ°ГІГЁГґГЁГЄГ ГІГ 
 # $context.RevokeCertificate($cert.Certificate.ToDer(), [Certes.Acme.Resource.RevocationReason]::KeyCompromise,$null)

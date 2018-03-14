@@ -1,0 +1,109 @@
+﻿# Path - где храним библиотеки
+# Mail - почта администратора
+# Domain - домен для которого получаем сертификат
+# PfxPassword - пароль для Pfx
+$Path = "C:\certes"
+$Mail = "mailto:admin@contoso.ru"
+$Domain = "*.contoso.ru"
+$PfxFriendlyName = "CONTOSO_{0}" -f (Get-Date).AddMonths(3).ToString("MMyy")
+$PfxPath = Join-Path $Path "wildcard_cert.pfx"
+$PfxPassword = "12345678"
+
+# Ссылки для скачивания nupkg
+$Urls = (
+	"https://www.nuget.org/api/v2/package/Certes",
+	"https://www.nuget.org/api/v2/package/BouncyCastle.Crypto.dll",
+	"https://www.nuget.org/api/v2/package/Newtonsoft.Json"
+)
+
+# Указываем библиотеки для проверки
+$Dlls = (
+	"$Path\lib\net45\Certes.dll",
+	"$Path\lib\BouncyCastle.Crypto.dll",
+	"$Path\lib\net45\Newtonsoft.Json.dll"
+)
+
+
+# Создаем папку
+if( -not (Test-Path $path) ) {
+	New-Item -Type Directory -Path $path | Out-Null
+}
+
+Test-Path $Dlls | Where-Object {-not $_} | Foreach-Object { 
+	$Urls | Foreach-Object {
+		# Скачиваем nupkg
+		$r = Invoke-WebRequest $_ -UseBasicParsing
+		$filename = Join-Path $path $r.BaseResponse.ResponseUri.Segments[-1]
+		[System.IO.File]::WriteAllBytes($filename,$r.Content)
+
+		# Распаковываем nupkg
+		Expand-Archive $filename  -OutputPath $path -Force
+	}
+}
+
+# Удалим лишнее
+Get-ChildItem $path | Where {$_.Name -ne "lib"} | Remove-Item -Force -Recurse
+
+# Подгрузи библиотеки
+$Dlls | Foreach-Object {
+	[System.Reflection.Assembly]::LoadFile($_) | Out-Null
+}
+
+
+# Создадим учетную запись
+# Для тестового использования LetsEncryptStagingV2
+$context = [Certes.AcmeContext]::new([Certes.Acme.WellKnownServers]::LetsEncryptV2)
+$context.Result
+$account = $context.NewAccount([System.Collections.Generic.List[string]]$Mail, $true)
+$account.Result
+
+# Формируем запрос на получение wildcard
+$order = $context.NewOrder([Collections.Generic.List[string]]$Domain)
+$authz = $order.Result.Authorizations()
+$dnsChallenge = $authz.Result.Resource().Result.Challenges
+
+# Содержит token для DNS записи _acme-challenge.contoso.com
+$dnsTxt = [Certes.ISignatureKeyExtensions]::DnsTxt($context.AccountKey,$dnsChallenge.Token)
+
+# Создаем ресурсные записи 
+# Windows DNS Server
+$DomainName = $Domain.Replace("*.","")
+$Name = "_acme-challenge"
+$record = Get-DnsServerResourceRecord -ZoneName $DomainName -Name $Name -RRType Txt
+
+if($record)
+{
+	$newrecord = $record.Clone()
+	$newrecord.RecordData.DescriptiveText = $_.RecordValue
+	Set-DnsServerResourceRecord -ZoneName $DomainName -NewInputObject $newrecord -OldInputObject $record
+}
+else
+{
+	Add-DnsServerResourceRecord -ZoneName $DomainName -Txt -Name $Name -DescriptiveText $dnsTxt
+}
+
+
+# Получаем сертификат
+if($dnsTxt) {
+	# Отправляем запрос на проверку DNS записи
+	$validatetatus = $authz.Result.Challenges().Result.Validate()
+	$validatetatus.Result
+	
+	# Finalize
+	$csr = [Certes.Pkcs.CertificationRequestBuilder]::new()
+	$csr.AddName("CN=$Domain")
+	$order.Result.Finalize($csr.Generate())
+	
+	# Скачиваем цепочку сертификатов
+	$certChain = $order.Result.Download()
+	$cert = $certChain.Result
+		
+	# Экспорт в Pfx
+	$certKey = [Certes.KeyFactory]::NewKey("RS256")
+	$pfx = [Certes.CertificateChainExtensions]::ToPfx($cert,$certKey)
+	$pfxcert = $pfx.Build($PfxFriendlyName, $PfxPassword)
+	[System.IO.File]::WriteAllBytes($PfxPath,$pfxcert)
+}
+
+# Отзыв сертификата
+# $context.RevokeCertificate($cert.Certificate.ToDer(), [Certes.Acme.Resource.RevocationReason]::KeyCompromise,$null)

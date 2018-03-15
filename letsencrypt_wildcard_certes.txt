@@ -53,7 +53,7 @@ $Dlls | Foreach-Object {
 # Создадим учетную запись
 # Для тестового использования LetsEncryptStagingV2
 $context = [Certes.AcmeContext]::new([Certes.Acme.WellKnownServers]::LetsEncryptV2)
-$context.Result
+$context
 $account = $context.NewAccount([System.Collections.Generic.List[string]]$Mail, $true)
 $account.Result
 

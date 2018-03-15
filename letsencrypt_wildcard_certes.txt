@@ -99,8 +99,7 @@ if($dnsTxt) {
 	$cert = $certChain.Result
 		
 	# Экспорт в Pfx
-	$certKey = [Certes.KeyFactory]::NewKey("RS256")
-	$pfx = [Certes.CertificateChainExtensions]::ToPfx($cert,$certKey)
+	$pfx = [Certes.CertificateChainExtensions]::ToPfx($cert,$csr.Key)
 	$pfxcert = $pfx.Build($PfxFriendlyName, $PfxPassword)
 	[System.IO.File]::WriteAllBytes($PfxPath,$pfxcert)
 }

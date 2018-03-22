@@ -1,4 +1,22 @@
-﻿# Path - где храним библиотеки
+#https://msdn.microsoft.com/en-us/library/windows/desktop/bb787866(v=vs.85).aspx
+#(16) - Respond with "Yes to All" for any dialog box that is displayed.
+#(512) - Do not confirm the creation of a new directory if the operation requires one to be created.
+function Expand-ZIPFile($file, $destination,[switch]$force)
+{
+    $shell = New-Object -ComObject Shell.Application
+    $zip = $shell.NameSpace($file)
+    foreach($item in $zip.items())
+    {
+		if($force) {
+			$shell.Namespace($destination).copyhere($item,528)
+		}
+		else {
+			$shell.Namespace($destination).copyhere($item)
+		}
+    }
+}
+
+# Path - где храним библиотеки
 # Mail - почта администратора
 # Domain - домен для которого получаем сертификат
 # PfxPassword - пароль для Pfx
@@ -37,7 +55,7 @@ Test-Path $Dlls | Where-Object {-not $_} | Foreach-Object {
 		[System.IO.File]::WriteAllBytes($filename,$r.Content)
 
 		# Распаковываем nupkg
-		Expand-Archive $filename  -OutputPath $path -Force
+		Expand-ZIPFile $filename $path -Force
 	}
 }
 

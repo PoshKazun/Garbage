@@ -44,7 +44,7 @@ Function Get-MappedLogicalDisk {
 	)
 
 	$script = {
-		# Текущий пользователь в системе выполнивший вход через консоль
+		# Текущий пользователь в системе выполнивший вход через консольный сеанс
 		$user = (Get-WmiObject -Class Win32_ComputerSystem).UserName
 		# Название задачи
 		$tn = "GetMappedLogicalDisk"
@@ -71,7 +71,7 @@ Function Get-MappedLogicalDisk {
 			# Запускаем задачу
 			$null = $taskdir.GetTask($tn).Run($null)
 				
-			# Проверим завершение задачи не зависимо от локализации ОС
+			# Проверим завершение задачи независимо от локализации ОС
 			$maxcount = 0
 			While($taskdir.GetTask($tn).State -ne 3 -and $maxcount -lt 60) {
 				$maxcount++

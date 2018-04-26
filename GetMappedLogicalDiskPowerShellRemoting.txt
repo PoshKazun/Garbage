@@ -1,0 +1,93 @@
+#  HKCU:\Network\ - Содержит диски подключенные с указанием флага PERSISTENT
+#  HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2 - Может содержать и актуальную,и неактуальную информацию
+#
+#  PS > Get-MappedLogicalDisk -ComputerName con-desk-01 -Credential "contoso\admin" | Format-Table Name,ProviderName,FileSystem,FreeSpace,Size -AutoSize
+#
+#  User        Name ProviderName      FileSystem   FreeSpace     Size
+#  ----        ---- ------------      ----------   ---------     ----
+#  CON\ivanov  Y:   \\fs01\Документы  NTFS         775772479488  1000198893568
+#  CON\ivanov  Z:   \\fs02\Фото       NTFS         775772479488  1000198893568
+
+Function Get-MappedLogicalDisk {
+	[CmdletBinding()]
+	Param (
+		[Parameter(ParameterSetName='ComputerName', Position=0)]
+		[ValidateNotNullOrEmpty()]
+		[String[]]$ComputerName,
+		
+		[Parameter(ParameterSetName='Session', Position=0)]
+		[ValidateNotNullOrEmpty()]
+		[System.Management.Automation.Runspaces.PSSession[]]
+		$Session,
+		
+		[Parameter(ParameterSetName='ComputerName')]
+		[System.Management.Automation.PSCredential]
+		[System.Management.Automation.CredentialAttribute()]
+		$Credential,
+		
+		[Parameter(ParameterSetName='ComputerName')]
+		[ValidateRange(1, 65535)]
+		[Int]$Port,
+		
+		[Parameter(ParameterSetName='ComputerName')]
+		[Switch]$UseSSL,
+		
+		[Parameter(ParameterSetName='ComputerName')]
+		[String]$ConfigurationName,
+		
+		[Parameter(ParameterSetName='ComputerName')]
+		[System.Management.Automation.Runspaces.AuthenticationMechanism]
+		$Authentication,
+		
+		[Parameter(ParameterSetName='ComputerName')]
+		[String]$CertificateThumbprint
+	)
+
+	$script = {
+		# Текущий пользователь в системе выполнивший вход через консоль
+		$user = (Get-WmiObject -Class Win32_ComputerSystem).UserName
+		# Название задачи
+		$tn = "GetMappedLogicalDisk"
+		# Папка для временного файла
+		$logdir = "C:\LogMAP"
+			
+		# Команда для получения сетевых дисков в контексте пользователя
+		# Возможно ограничение в 260 символов 
+		$arg = '&{{New-Item -Path {0} -Type Directory -Force;Get-WmiObject Win32_MappedLogicalDisk | Export-Clixml {0}\$env:UserName.xml}}' -f $logdir
+		$cmd = 'powershell.exe -WindowStyle Hidden -NoProfile -NoLogo -Command {0}' -f $arg
+					
+		if($user) {
+			# Создаем ComObject для работы с Task Scheduler
+			$sch = New-Object -ComObject Schedule.Service
+			$sch.Connect()
+			# Корневая директория для заданий
+			$taskdir = $sch.GetFolder("\")
+			
+			# Удаляем прежние данные
+			Remove-Item -Path $logdir -Force -Recurse -ErrorAction SilentlyContinue
+				
+			# Создаем задачу в контексте пользователя
+			$null = schtasks.exe /create /TN $tn /ST 00:00 /RU $user /SC ONCE /TR $cmd /f 2>&1
+			# Запускаем задачу
+			$null = $taskdir.GetTask($tn).Run($null)
+				
+			# Проверим завершение задачи не зависимо от локализации ОС
+			$maxcount = 0
+			While($taskdir.GetTask($tn).State -ne 3 -and $maxcount -lt 60) {
+				$maxcount++
+				Start-Sleep -Sec 1
+			}
+				
+			# Получаем результат
+			Import-CliXML C:\LogMAP\*.xml | Add-Member -Type NoteProperty -Name User -Value $user -PassThru
+				
+			# Удаляем временную задачу и файлы
+			Remove-Item -Path $logdir -Force -Recurse -ErrorAction SilentlyContinue
+			$null = $taskdir.DeleteTask($tn,0)
+		} else {
+			"В системе нет пользователей выполнивших вход!"
+		}
+	}
+		
+	Invoke-Command @PSBoundParameters -ScriptBlock $script
+}

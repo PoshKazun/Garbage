@@ -79,7 +79,7 @@ Function Get-MappedLogicalDisk {
 			}
 				
 			# Получаем результат
-			Import-CliXML C:\LogMAP\*.xml | Add-Member -Type NoteProperty -Name User -Value $user -PassThru
+			Import-CliXML $logdir\*.xml | Add-Member -Type NoteProperty -Name User -Value $user -PassThru
 				
 			# Удаляем временную задачу и файлы
 			Remove-Item -Path $logdir -Force -Recurse -ErrorAction SilentlyContinue

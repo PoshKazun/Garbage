@@ -1,0 +1,84 @@
+# Скрипт демонстрация получения списка обновлений из Control Panel\Programs\Programs and Features -> Installed Updates
+# appwiz.cpl -> Installed Updates
+# Windows Server 2012 R2
+# Products
+$pr = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\"
+$u1 = Get-ChildItem -Path $pr | ForEach-Object {
+    Get-ChildItem -Path "$($_.PSPath)\Products" | ForEach-Object {
+        $ppatch = "$($_.PSPath)\Patches"
+        $haspatch = Get-ItemProperty -Path $ppatch -Name AllPatches -ErrorAction SilentlyContinue
+
+        if($haspatch.AllPatches) {
+            $iprop = Get-ItemProperty -Path "$($_.PSPath)\InstallProperties" -Name DisplayName,SystemComponent -ErrorAction SilentlyContinue
+            if($iprop.SystemComponent -ne 1) {
+                $haspatch.AllPatches | Foreach-Object {"$ppatch\$_"} | Get-ItemProperty -Name DisplayName | ForEach-Object {
+                    [PSCustomObject]@{
+                        DisplayName = $iprop.DisplayName
+                        KB = $_.DisplayName
+                    }
+                }
+            }
+        }
+    }
+} 
+$u1 | Format-Table -GroupBy DisplayName
+
+# Packages
+$installed = 0x70
+$rcbs = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages\"
+$lcsb = "C:\Windows\servicing\Packages"
+$source = "UpdateAgentLCU","WindowsUpdateAgent","DISM Package Manager Provider"
+$u2 = Get-ChildItem $rcbs| Get-ItemProperty  | Where-Object {$source -contains $_.InstallClient -and $_.CurrentState -eq $installed} | ForEach-Object {
+    $in = $_.InstallName
+    
+    if($in -eq "update.mum") {
+        $in = $_.PsChildName + ".mum"
+    }
+
+    $nlcsb = Join-Path $lcsb $in
+    $xml = [xml](Get-Content $nlcsb)
+    $kb = $xml.assembly.package.identifier
+    $type = $xml.assembly.package.releaseType
+
+    if($kb -match "KB\d+" -and $type -match "(Update|Hotfix)") {
+        $name = $xml.assembly.DisplayName
+
+        if($name -notmatch "Security") {
+            if($type -eq "Update") {
+                $name = "Update for Microsoft Windows ($kb)"
+            } else {
+                $name = "Security Update for Microsoft Windows ($kb)"
+            }
+        }
+
+        [PSCustomObject]@{
+            DisplayName = $name
+            KB = $kb
+        }
+    }
+} | Sort-Object KB -Unique
+
+$u2
+
+# Uninstall
+$rk = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\","HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\"
+
+$u3 = Get-ChildItem $rk -Recurse -ErrorAction 0 | Get-ItemProperty -Name DisplayName,ParentDisplayName -ErrorAction SilentlyContinue | Where-Object {$_.DisplayName -match "KB\d+"} | ForEach-Object {
+	$n = $_.DisplayName
+    $p = $_.ParentDisplayName
+
+    if(!$p) {
+        $p = "Unspecified"
+    }
+
+    [PSCustomObject]@{
+        DisplayName = $n 
+        KB = ($n -split "[()]" -match "KB")[0]
+        ParentDisplayName = $p
+    }
+} | Sort-Object ParentDisplayName,DisplayName
+
+$u3 | Format-Table -GroupBy ParentDisplayName
+
+"`n`nTotal updates: {0}" -f (@($u1).count + @($u2).count+@($u3).count)
+

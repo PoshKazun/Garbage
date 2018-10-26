@@ -1,0 +1,86 @@
+﻿#Requires -RunAsAdministrator
+
+[CmdletBinding()]
+Param(
+	$TempPath = "C:\tempssh",
+	$SymbolicLinkPath = "C:\pwsh"
+)
+
+#### 1. Скачивание дистрибутивов PowerShell Core & Win32-OpenSSH последних release-ов
+Write-Verbose -Message "1. Downloading files"
+# Временный путь для сохранения дистрибутивов
+if (-Not (Test-Path -Path $TempPath)) {
+	$null = md $TempPath -Force
+}
+
+$msiPath = Join-Path -Path $TempPath -ChildPath "pwsh-win-x64.msi"
+$zipPath = Join-Path -Path $TempPath -ChildPath "openssh-win64.zip"
+
+#### Ссылки на дистрибутивы
+$gitUrl = "https://github.com"
+$pwshUrl = "https://github.com/PowerShell/PowerShell/releases/latest"
+$sshUrl = "https://github.com/PowerShell/Win32-OpenSSH/releases/latest"
+
+# Задаем Transport Layer Security (TLS) 1.2 протокол 
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# PowerShell Core x64 msi
+$tagUrl = (Invoke-WebRequest -Uri $pwshUrl -UseBasicParsing -MaximumRedirection 0 -Method Head -ErrorAction SilentlyContinue).Headers["Location"]
+$iw = Invoke-WebRequest -Uri $tagUrl -UseBasicParsing -MaximumRedirection 0 -ErrorAction SilentlyContinue
+$msiUrl = $gitUrl + @($iw.Links.href -match "-win-x64.msi")[0]
+Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath 
+
+# Win32-OpenSSH-x64
+$tagUrl = (Invoke-WebRequest -Uri $sshUrl -UseBasicParsing -MaximumRedirection 0 -Method Head -ErrorAction SilentlyContinue).Headers["Location"]
+$sshUrl = $tagUrl.Replace('tag','download') + '/OpenSSH-Win64.zip' 
+Invoke-WebRequest -Uri $sshUrl -OutFile $zipPath
+
+#### 2. Установка PowerShell Core 
+Write-Verbose -Message "2. Installing PowerShell Core"
+# Установка в автоматическом режиме
+Start-Process -FilePath msiexec -ArgumentList "/i","$msiPath","/quiet" -Wait
+
+# Создание SymbolicLink(путь должен быть без пробелов для Win32-OpenSSH)
+New-Item -ItemType SymbolicLink -Path $SymbolicLinkPath -Target "$env:ProgramFiles\PowerShell\6"
+
+# Включение Windows Remoting
+& "$env:ProgramFiles\PowerShell\6\Install-PowerShellRemoting.ps1" -PowerShellHome "$env:ProgramFiles\PowerShell\6"
+
+#### 3. Установка Win32-OpenSSH
+Write-Verbose -Message "3. Installing Win32-OpenSSH"
+# Распаковка архива
+Expand-Archive -Path $zipPath -DestinationPath "$env:ProgramFiles\"
+Rename-Item "$env:ProgramFiles\OpenSSH-Win64" "$env:ProgramFiles\OpenSSH"
+
+# OpenSSH-Win64
+& "$env:ProgramFiles\OpenSSH\install-sshd.ps1"
+
+# Разрешающее правило в Firewall - 22/tcp
+New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+
+# Тип запуска службы Automatic и старт службы
+Set-Service -Name sshd -StartupType Automatic
+Start-Service -Name sshd
+
+# Конфиг sshd - $env:ProgramData\ssh\sshd_config
+# Кодировка файла UTF-8 Without BOM
+$sshd_config = "$env:ProgramData\ssh\sshd_config"
+Copy-Item -Path $sshd_config -Destination "${sshd_config}_bak"
+
+$value = @"
+AuthorizedKeysFile      .ssh/authorized_keys
+PasswordAuthentication yes
+PubkeyAuthentication yes
+Subsystem       sftp    sftp-server.exe
+Subsystem       powershell $SymbolicLinkPath\pwsh.exe -sshs -NoLogo -NoProfile
+"@
+
+[IO.File]::WriteAllLines($sshd_config, $value)
+
+# Перезапуск службы для обновление параметров
+Stop-Service -Name sshd
+Start-Service -Name sshd
+		
+#### 4. Удаление временной папки с дистрибутивами
+Write-Verbose -Message "4. Removing old files"
+Remove-Item -Path $TempPath -Recurse -Force
